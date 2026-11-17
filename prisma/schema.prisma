@@ -1,0 +1,252 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  MANAGER
+  DOCTOR
+}
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  LOCKED
+}
+enum BatchStatus {
+  UPLOADED
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  ON_HOLD
+}
+enum CaseStatus {
+  UPLOADED
+  ASSIGNED
+  ACKNOWLEDGED
+  IN_PROGRESS
+  SUBMITTED
+  REVIEWED
+  COMPLETED
+  REJECTED
+  RETURNED_FOR_CORRECTION
+  REASSIGNED
+  CANCELLED
+  ON_HOLD
+}
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+enum StorageProvider {
+  LOCAL
+  CLOUDINARY
+}
+
+model User {
+  id                 String       @id @default(cuid())
+  email              String       @unique
+  passwordHash       String
+  name               String
+  role               UserRole
+  status             UserStatus   @default(ACTIVE)
+  failedLoginAttempts Int          @default(0)
+  lockedUntil        DateTime?
+  lastLoginAt        DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  doctor             Doctor?
+  uploadedBatches    AuditBatch[] @relation("BatchUploader")
+  auditLogs          AuditLog[]
+  notifications      Notification[]
+  assignmentsMade    AssignmentHistory[] @relation("AssignedBy")
+  reviews            AuditReview[]
+}
+
+model Doctor {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  specialty   String?
+  licenseNo   String?  @unique
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cases       AuditCase[]
+  assignments AssignmentHistory[] @relation("AssignedDoctor")
+}
+
+model AuditBatch {
+  id          String      @id
+  name        String
+  status      BatchStatus @default(UPLOADED)
+  deadline    DateTime?
+  sourceFile  String?
+  totalRows   Int         @default(0)
+  validRows   Int         @default(0)
+  invalidRows Int         @default(0)
+  duplicateRows Int       @default(0)
+  uploadedById String
+  uploadedAt  DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  uploadedBy  User        @relation("BatchUploader", fields: [uploadedById], references: [id])
+  cases       AuditCase[]
+  importJobs  ImportJob[]
+  @@index([status, deadline])
+}
+
+model AuditCase {
+  id             String     @id
+  batchId        String
+  doctorId       String?
+  claimId        String?
+  hospital       String
+  patient        String?
+  packageName    String?
+  claimAmount    Decimal    @default(0) @db.Decimal(14,2)
+  approvedAmount Decimal    @default(0) @db.Decimal(14,2)
+  priority       String     @default("Medium")
+  status         CaseStatus @default(UPLOADED)
+  deadline       DateTime?
+  sourceData     Json?
+  version        Int        @default(1)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  batch          AuditBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  doctor         Doctor?    @relation(fields: [doctorId], references: [id], onDelete: SetNull)
+  response       AuditResponse?
+  attachments    Attachment[]
+  statusHistory  StatusHistory[]
+  assignments    AssignmentHistory[]
+  reviews        AuditReview[]
+  @@index([batchId, status])
+  @@index([doctorId, status])
+  @@index([hospital])
+  @@index([claimId])
+}
+
+model AuditResponse {
+  id                   String   @id @default(cuid())
+  caseId               String   @unique
+  auditResult          String?
+  findingCategory      String?
+  documentVerification String?
+  clinicalJustification String?
+  financialObservation String?
+  finalDecision        String?
+  remarks              String?
+  isDraft              Boolean  @default(true)
+  submittedAt          DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  case                 AuditCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+model AuditReview {
+  id         String   @id @default(cuid())
+  caseId     String
+  reviewerId String
+  action     String
+  note       String?
+  createdAt  DateTime @default(now())
+  case       AuditCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  reviewer   User      @relation(fields: [reviewerId], references: [id])
+}
+
+model AssignmentHistory {
+  id          String   @id @default(cuid())
+  caseId      String
+  fromDoctorId String?
+  toDoctorId  String
+  assignedById String
+  reason      String
+  createdAt   DateTime @default(now())
+  case        AuditCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  doctor      Doctor    @relation("AssignedDoctor", fields: [toDoctorId], references: [id])
+  assignedBy  User      @relation("AssignedBy", fields: [assignedById], references: [id])
+  @@index([caseId, createdAt])
+}
+
+model StatusHistory {
+  id        String     @id @default(cuid())
+  caseId    String
+  fromStatus CaseStatus?
+  toStatus  CaseStatus
+  changedBy String
+  reason    String?
+  createdAt DateTime   @default(now())
+  case      AuditCase  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  @@index([caseId, createdAt])
+}
+
+model Attachment {
+  id        String          @id @default(cuid())
+  caseId    String
+  name      String
+  mimeType  String
+  size      Int
+  provider  StorageProvider
+  url       String
+  publicId  String
+  createdAt DateTime        @default(now())
+  case      AuditCase       @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+model MasterOption {
+  id        String   @id @default(cuid())
+  group     String
+  value     String
+  enabled   Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([group, value])
+  @@index([group, enabled])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, readAt, createdAt])
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  actorId       String?
+  action        String
+  entityType    String
+  entityId      String?
+  previousValue Json?
+  newValue      Json?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime @default(now())
+  actor         User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model ImportJob {
+  id          String    @id @default(cuid())
+  batchId     String?
+  fileName    String
+  status      JobStatus @default(PENDING)
+  totalRows   Int       @default(0)
+  validRows   Int       @default(0)
+  invalidRows Int       @default(0)
+  errors      Json?
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+  batch       AuditBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+}
